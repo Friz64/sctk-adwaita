@@ -18,7 +18,7 @@ use smithay_client_toolkit::reexports::csd_frame::{
     CursorIcon, DecorationsFrame, FrameAction, FrameClick, WindowManagerCapabilities, WindowState,
 };
 
-use smithay_client_toolkit::compositor::SurfaceData;
+use smithay_client_toolkit::compositor::{CompositorState, Region, SurfaceData};
 use smithay_client_toolkit::shell::WaylandSurface;
 use smithay_client_toolkit::shm::{slot::SlotPool, Shm};
 use smithay_client_toolkit::subcompositor::SubcompositorState;
@@ -51,6 +51,8 @@ type SkiaResult = Option<()>;
 pub struct AdwaitaFrame<State> {
     /// The base surface used to create the window.
     base_surface: WlTyped<WlSurface, SurfaceData>,
+
+    compositor: Arc<CompositorState>,
 
     /// Subcompositor to create/drop subsurfaces ondemand.
     subcompositor: Arc<SubcompositorState>,
@@ -92,6 +94,7 @@ where
     pub fn new(
         base_surface: &impl WaylandSurface,
         shm: &Shm,
+        compositor: Arc<CompositorState>,
         subcompositor: Arc<SubcompositorState>,
         queue_handle: QueueHandle<State>,
         frame_config: FrameConfig,
@@ -112,6 +115,7 @@ where
             base_surface,
             decorations,
             pool,
+            compositor,
             subcompositor,
             queue_handle,
             dirty: true,
@@ -194,25 +198,24 @@ where
         {
             let scale = self.scale_factor;
 
+            let mut rect = part.surface_rect;
             // XXX to perfectly align the visible borders we draw them with
             // the header, otherwise rounded corners won't look 'smooth' at the
             // start. To achieve that, we enlargen the width of the header by
             // 2 * `VISIBLE_BORDER_SIZE`, and move `x` by `VISIBLE_BORDER_SIZE`
             // to the left.
-            let (width, height, pos) = if idx == DecorationParts::HEADER && draw_borders {
-                (
-                    (part.width + 2 * VISIBLE_BORDER_SIZE) * scale,
-                    part.height * scale,
-                    (part.pos.0 - VISIBLE_BORDER_SIZE as i32, part.pos.1),
-                )
-            } else {
-                (part.width * scale, part.height * scale, part.pos)
-            };
+            if idx == DecorationParts::HEADER && draw_borders {
+                rect.width += 2 * VISIBLE_BORDER_SIZE;
+                rect.x -= VISIBLE_BORDER_SIZE as i32;
+            }
+
+            rect.width *= scale;
+            rect.height *= scale;
 
             let (buffer, canvas) = match self.pool.create_buffer(
-                width as i32,
-                height as i32,
-                width as i32 * 4,
+                rect.width as i32,
+                rect.height as i32,
+                rect.width as i32 * 4,
                 wl_shm::Format::Argb8888,
             ) {
                 Ok((buffer, canvas)) => (buffer, canvas),
@@ -220,7 +223,7 @@ where
             };
 
             // Create the pixmap and fill with transparent color.
-            let mut pixmap = PixmapMut::from_bytes(canvas, width, height)?;
+            let mut pixmap = PixmapMut::from_bytes(canvas, rect.width, rect.height)?;
 
             // Fill everything with transparent background, since we draw rounded corners and
             // do invisible borders to enlarge the input zone.
@@ -250,34 +253,34 @@ where
 
                     // XXX we do all the match using integral types and then convert to f32 in the
                     // end to ensure that result is finite.
-                    let rect = match border {
+                    let border_rect = match border {
                         DecorationParts::LEFT => {
-                            let x = (pos.0.unsigned_abs() * scale) - visible_border_size;
-                            let y = pos.1.unsigned_abs() * scale;
+                            let x = (rect.x.unsigned_abs() * scale) - visible_border_size;
+                            let y = rect.y.unsigned_abs() * scale;
                             Rect::from_xywh(
                                 x as f32,
                                 y as f32,
                                 visible_border_size as f32,
-                                (height - y) as f32,
+                                (rect.height - y) as f32,
                             )
                         }
                         DecorationParts::RIGHT => {
-                            let y = pos.1.unsigned_abs() * scale;
+                            let y = rect.y.unsigned_abs() * scale;
                             Rect::from_xywh(
                                 0.,
                                 y as f32,
                                 visible_border_size as f32,
-                                (height - y) as f32,
+                                (rect.height - y) as f32,
                             )
                         }
                         // We draw small visible border only bellow the window surface, no need to
                         // handle `TOP`.
                         DecorationParts::BOTTOM => {
-                            let x = (pos.0.unsigned_abs() * scale) - visible_border_size;
+                            let x = (rect.x.unsigned_abs() * scale) - visible_border_size;
                             Rect::from_xywh(
                                 x as f32,
                                 0.,
-                                (width - 2 * x) as f32,
+                                (rect.width - 2 * x) as f32,
                                 visible_border_size as f32,
                             )
                         }
@@ -285,8 +288,8 @@ where
                     };
 
                     // Fill the visible border, if present.
-                    if let Some(rect) = rect {
-                        pixmap.fill_rect(rect, &border_paint, Transform::identity(), None);
+                    if let Some(border_rect) = border_rect {
+                        pixmap.fill_rect(border_rect, &border_paint, Transform::identity(), None);
                     }
                 }
             };
@@ -299,13 +302,26 @@ where
 
             part.surface.set_buffer_scale(scale as i32);
 
-            part.subsurface.set_position(pos.0, pos.1);
+            part.subsurface.set_position(rect.x, rect.y);
             buffer.attach_to(&part.surface).ok()?;
 
             if part.surface.version() >= 4 {
                 part.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
             } else {
                 part.surface.damage(0, 0, i32::MAX, i32::MAX);
+            }
+
+            if let Some(input_rect) = part.input_rect {
+                let input_region = Region::new(&*self.compositor).unwrap();
+                input_region.add(
+                    input_rect.x,
+                    input_rect.y,
+                    input_rect.width as i32,
+                    input_rect.height as i32,
+                );
+
+                part.surface
+                    .set_input_region(Some(input_region.wl_region()));
             }
 
             part.surface.commit();
@@ -454,7 +470,7 @@ where
             return None;
         }
 
-        let header_width = decorations.header().width;
+        let header_width = decorations.header().surface_rect.width;
         let old_location = self.mouse.location;
 
         let location = self.precise_location(location, header_width, x, y);

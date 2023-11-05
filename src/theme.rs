@@ -1,7 +1,8 @@
 pub use tiny_skia::Color;
 use tiny_skia::{Paint, Shader};
 
-pub(crate) const BORDER_SIZE: u32 = 10;
+pub(crate) const BORDER_SIZE: u32 = RESIZE_RANGE;
+pub(crate) const RESIZE_RANGE: u32 = 10;
 pub(crate) const HEADER_SIZE: u32 = 35;
 pub(crate) const CORNER_RADIUS: u32 = 10;
 pub(crate) const VISIBLE_BORDER_SIZE: u32 = 1;
