@@ -576,7 +576,7 @@ fn draw_headerbar(
 
             let text_canvas_end_x = right_buttons_start_x - x - offset_x;
             // Ensure that text start within the bounds.
-            let x = x.max(margin_h + offset_x);
+            let x = x.max(margin_h + offset_x).round();
 
             if let Some(clip) =
                 Rect::from_xywh(text_canvas_start_x, 0., text_canvas_end_x, canvas_h)
