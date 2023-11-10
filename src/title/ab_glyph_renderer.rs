@@ -82,6 +82,7 @@ impl AbGlyphTitleText {
         let last_glyph = glyphs.last()?;
         let width = (last_glyph.position.x + font.h_advance(last_glyph.id)).ceil() as u32;
         let height = font.height().ceil() as u32;
+        let max_alpha = self.color.alpha();
 
         let mut pixmap = Pixmap::new(width, height)?;
 
@@ -95,7 +96,7 @@ impl AbGlyphTitleText {
                 outline.draw(|x, y, c| {
                     let p_idx = (top + y) * width + (left + x);
                     let old_alpha_u8 = pixels[p_idx as usize].alpha();
-                    let new_alpha = c + (old_alpha_u8 as f32 / 255.0);
+                    let new_alpha = (c + (old_alpha_u8 as f32 / 255.0)).min(max_alpha);
                     if let Some(px) = PremultipliedColorU8::from_rgba(
                         (self.color.red() * new_alpha * 255.0) as _,
                         (self.color.green() * new_alpha * 255.0) as _,
