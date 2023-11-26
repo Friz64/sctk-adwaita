@@ -9,7 +9,7 @@ use smithay_client_toolkit::{
     subcompositor::{SubcompositorState, SubsurfaceData},
 };
 
-use crate::theme::{BORDER_SIZE, HEADER_SIZE, RESIZE_RANGE};
+use crate::theme::{BORDER_SIZE, HEADER_SIZE, RESIZE_HANDLE_SIZE};
 use crate::{pointer::Location, wl_typed::WlTyped};
 
 /// The decoration's 'parts'.
@@ -50,10 +50,10 @@ impl DecorationParts {
                     height: BORDER_SIZE,
                 },
                 Some(Rect {
-                    x: BORDER_SIZE as i32 - RESIZE_RANGE as i32,
-                    y: BORDER_SIZE as i32 - RESIZE_RANGE as i32,
+                    x: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
+                    y: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
                     width: 0, // Defined by `Self::resize`.
-                    height: RESIZE_RANGE,
+                    height: RESIZE_HANDLE_SIZE,
                 }),
             ),
             // Left.
@@ -68,9 +68,9 @@ impl DecorationParts {
                     height: 0, // Defined by `Self::resize`.
                 },
                 Some(Rect {
-                    x: BORDER_SIZE as i32 - RESIZE_RANGE as i32,
+                    x: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
                     y: 0,
-                    width: RESIZE_RANGE,
+                    width: RESIZE_HANDLE_SIZE,
                     height: 0, // Defined by `Self::resize`.
                 }),
             ),
@@ -88,7 +88,7 @@ impl DecorationParts {
                 Some(Rect {
                     x: 0,
                     y: 0,
-                    width: RESIZE_RANGE,
+                    width: RESIZE_HANDLE_SIZE,
                     height: 0, // Defined by `Self::resize`.
                 }),
             ),
@@ -104,10 +104,10 @@ impl DecorationParts {
                     height: BORDER_SIZE,
                 },
                 Some(Rect {
-                    x: BORDER_SIZE as i32 - RESIZE_RANGE as i32,
+                    x: BORDER_SIZE as i32 - RESIZE_HANDLE_SIZE as i32,
                     y: 0,
                     width: 0, // Defined by `Self::resize`,
-                    height: RESIZE_RANGE,
+                    height: RESIZE_HANDLE_SIZE,
                 }),
             ),
             // Header.
@@ -156,11 +156,12 @@ impl DecorationParts {
         self.parts[Self::BOTTOM].surface_rect.width = width + 2 * BORDER_SIZE;
         self.parts[Self::BOTTOM].surface_rect.y = height as i32;
         self.parts[Self::BOTTOM].input_rect.as_mut().unwrap().width =
-            self.parts[Self::BOTTOM].surface_rect.width - (BORDER_SIZE * 2) + (RESIZE_RANGE * 2);
+            self.parts[Self::BOTTOM].surface_rect.width - (BORDER_SIZE * 2)
+                + (RESIZE_HANDLE_SIZE * 2);
 
         self.parts[Self::TOP].surface_rect.width = self.parts[Self::BOTTOM].surface_rect.width;
         self.parts[Self::TOP].input_rect.as_mut().unwrap().width =
-            self.parts[Self::TOP].surface_rect.width - (BORDER_SIZE * 2) + (RESIZE_RANGE * 2);
+            self.parts[Self::TOP].surface_rect.width - (BORDER_SIZE * 2) + (RESIZE_HANDLE_SIZE * 2);
 
         self.parts[Self::LEFT].surface_rect.height = height + HEADER_SIZE;
         self.parts[Self::LEFT].input_rect.as_mut().unwrap().height =
@@ -172,8 +173,12 @@ impl DecorationParts {
             self.parts[Self::RIGHT].surface_rect.height;
     }
 
-    pub fn header(&self) -> &Part {
-        &self.parts[Self::HEADER]
+    pub fn header_width(&self) -> u32 {
+        self.parts[Self::HEADER].surface_rect.width
+    }
+
+    pub fn side_height(&self) -> u32 {
+        self.parts[Self::LEFT].surface_rect.height
     }
 
     pub fn find_surface(&self, surface: &ObjectId) -> Location {
