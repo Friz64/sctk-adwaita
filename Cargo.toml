@@ -16,7 +16,8 @@ tiny-skia = { version = "0.11", default-features = false, features = [
   "std",
   "simd",
 ] }
-smithay-client-toolkit = { version = "0.18.0", default_features = false }
+# smithay-client-toolkit = { version = "0.18.0", default_features = false }
+smithay-client-toolkit = { path = "../client-toolkit", default_features = false }
 
 # Draw title text using crossfont `--features crossfont`
 crossfont = { version = "0.6.0", features = [

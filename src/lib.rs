@@ -143,6 +143,10 @@ where
         self.dirty = true;
     }
 
+    fn draw_borders(&self) -> bool {
+        !self.state.contains(WindowState::MAXIMIZED)
+    }
+
     fn precise_location(
         &self,
         location: Location,
@@ -150,7 +154,7 @@ where
         x: f64,
         y: f64,
     ) -> Location {
-        let header_width = decoration.header().surface_rect.width;
+        let header_width = decoration.header().rect.width;
         let side_height = decoration.side_height();
 
         let left_corner_x = BORDER_SIZE + RESIZE_HANDLE_CORNER_SIZE;
@@ -200,7 +204,9 @@ where
     }
 
     fn redraw_inner(&mut self) -> Option<bool> {
+        let draw_borders = self.draw_borders();
         let decorations = self.decorations.as_mut()?;
+        let scale = self.scale_factor;
 
         // Reset the dirty bit.
         self.dirty = false;
@@ -218,23 +224,33 @@ where
             &self.theme.inactive
         };
 
-        let draw_borders = if self.state.contains(WindowState::MAXIMIZED) {
-            // Don't draw the borders.
-            decorations.hide_borders();
-            false
-        } else {
-            true
-        };
         let border_paint = colors.border_paint();
+        let mut surface_rect = decorations.surface_rect(draw_borders);
+        surface_rect.width *= scale;
+        surface_rect.height *= scale;
+
+        let (buffer, canvas) = self
+            .pool
+            .create_buffer(
+                surface_rect.width as i32,
+                surface_rect.height as i32,
+                surface_rect.width as i32 * 4,
+                wl_shm::Format::Argb8888,
+            )
+            .ok()?;
+        let input_region = Region::new(&*self.compositor).ok()?;
+
+        // Create the pixmap and fill with transparent color.
+        let mut main_pixmap =
+            PixmapMut::from_bytes(canvas, surface_rect.width, surface_rect.height)?;
+        main_pixmap.fill(Color::TRANSPARENT);
 
         // Draw the borders.
         for (idx, part) in decorations
             .parts()
             .filter(|(idx, _)| *idx == DecorationParts::HEADER || draw_borders)
         {
-            let scale = self.scale_factor;
-
-            let mut rect = part.surface_rect;
+            let mut rect = part.rect;
             // XXX to perfectly align the visible borders we draw them with
             // the header, otherwise rounded corners won't look 'smooth' at the
             // start. To achieve that, we enlargen the width of the header by
@@ -248,22 +264,8 @@ where
             rect.width *= scale;
             rect.height *= scale;
 
-            let (buffer, canvas) = match self.pool.create_buffer(
-                rect.width as i32,
-                rect.height as i32,
-                rect.width as i32 * 4,
-                wl_shm::Format::Argb8888,
-            ) {
-                Ok((buffer, canvas)) => (buffer, canvas),
-                Err(_) => continue,
-            };
-
-            // Create the pixmap and fill with transparent color.
-            let mut pixmap = PixmapMut::from_bytes(canvas, rect.width, rect.height)?;
-
-            // Fill everything with transparent background, since we draw rounded corners and
-            // do invisible borders to enlarge the input zone.
-            pixmap.fill(Color::TRANSPARENT);
+            let mut pixmap = Pixmap::new(rect.width, rect.height).unwrap();
+            let mut pixmap = pixmap.as_mut();
 
             if !self.state.intersects(WindowState::TILED) {
                 self.shadow.draw(
@@ -339,38 +341,66 @@ where
                 }
             };
 
-            if should_sync {
-                part.subsurface.set_sync();
-            } else {
-                part.subsurface.set_desync();
-            }
+            main_pixmap.draw_pixmap(
+                (rect.x - surface_rect.x) * scale as i32,
+                (rect.y - surface_rect.y) * scale as i32,
+                pixmap.as_ref(),
+                &PixmapPaint::default(),
+                Transform::identity(),
+                None,
+            );
 
-            part.surface.set_buffer_scale(scale as i32);
+            let input_rect = part.input_rect();
+            input_region.add(
+                (rect.x - surface_rect.x) + input_rect.x,
+                (rect.y - surface_rect.y) + input_rect.y,
+                input_rect.width as i32,
+                input_rect.height as i32,
+            );
 
-            part.subsurface.set_position(rect.x, rect.y);
-            buffer.attach_to(&part.surface).ok()?;
-
-            if part.surface.version() >= 4 {
-                part.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
-            } else {
-                part.surface.damage(0, 0, i32::MAX, i32::MAX);
-            }
-
-            if let Some(input_rect) = part.input_rect {
-                let input_region = Region::new(&*self.compositor).ok()?;
-                input_region.add(
-                    input_rect.x,
-                    input_rect.y,
-                    input_rect.width as i32,
-                    input_rect.height as i32,
-                );
-
-                part.surface
-                    .set_input_region(Some(input_region.wl_region()));
-            }
-
-            part.surface.commit();
+            // main_pixmap.fill_rect(
+            //     Rect::from_xywh(
+            //         ((rect.x - surface_rect.x) + input_rect.x) as _,
+            //         ((rect.y - surface_rect.y) + input_rect.y) as _,
+            //         input_rect.width as _,
+            //         input_rect.height as _,
+            //     )
+            //     .unwrap(),
+            //     &tiny_skia::Paint {
+            //         shader: tiny_skia::Shader::SolidColor(
+            //             Color::from_rgba(1.0, 0.0, 1.0, 0.3).unwrap(),
+            //         ),
+            //         ..Default::default()
+            //     },
+            //     Transform::identity(),
+            //     None,
+            // );
         }
+
+        if should_sync {
+            decorations.subsurface.set_sync();
+        } else {
+            decorations.subsurface.set_desync();
+        }
+
+        decorations.surface.set_buffer_scale(scale as i32);
+
+        decorations
+            .subsurface
+            .set_position(surface_rect.x, surface_rect.y);
+        buffer.attach_to(&decorations.surface).ok()?;
+
+        if decorations.surface.version() >= 4 {
+            decorations.surface.damage_buffer(0, 0, i32::MAX, i32::MAX);
+        } else {
+            decorations.surface.damage(0, 0, i32::MAX, i32::MAX);
+        }
+
+        decorations
+            .surface
+            .set_input_region(Some(input_region.wl_region()));
+
+        decorations.surface.commit();
 
         Some(should_sync)
     }
@@ -510,7 +540,8 @@ where
         y: f64,
     ) -> Option<CursorIcon> {
         let decorations = self.decorations.as_ref()?;
-        let location = decorations.find_surface(surface);
+        let location = decorations.find_part(surface, self.draw_borders(), x, y);
+        dbg!(location);
         if location == Location::None {
             return None;
         }
